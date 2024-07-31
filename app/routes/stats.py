@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Query, Depends, HTTPException, Request
 from app.services.data_service import DataService
+from pydantic import BaseModel, field_validator, ValidationInfo
 
 from typing import Optional, List
 from datetime import datetime
@@ -8,6 +9,29 @@ router = APIRouter()
 
 def get_data_service(request: Request):
     return request.app.state.data_service
+
+class StatsParams(BaseModel):
+    channels: Optional[List[str]] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+    @field_validator('start_date', 'end_date', mode='before')
+    @classmethod
+    def parse_datetime(cls, value):
+        if isinstance(value, str):
+            try:
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                raise ValueError("Invalid datetime format. Use YYYY-MM-DD HH:MM:SS.")
+        return value
+
+    @field_validator('end_date')
+    @classmethod
+    def end_date_after_start_date(cls, v: Optional[datetime], info: ValidationInfo) -> Optional[datetime]:
+        if v and info.data.get('start_date') and v <= info.data['start_date']:
+            raise ValueError("end_date must be after start_date")
+        return v
+
 
 @router.get("/stats")
 async def get_stats(
@@ -23,28 +47,36 @@ async def get_stats(
     - **end_date**: Optional end datetime for the stats calculation (format: YYYY-MM-DD HH:MM:SS). If not provided, the latest datetime in the dataset is used.
     """
     try:
+        params = StatsParams(
+            channels=channels,
+            start_date=start_date,
+            end_date=end_date
+        )
+
         # Validate channels if provided
-        if channels:
-            invalid_channels = [ch for ch in channels if ch not in data_service.get_channels()]
+        if params.channels:
+            # Check if there are ANY entities that are not in the data_service.get_channels()
+            invalid_channels = set(params.channels) - set(data_service.get_channels())
             if invalid_channels:
                 raise HTTPException(status_code=400, detail=f"Invalid channel(s): {', '.join(invalid_channels)}")
 
-        # Validate and parse datetimes
-        try:
-            if start_date:
-                start_date = datetime.fromisoformat(start_date).strftime("%Y-%m-%d %H:%M:%S")
-            if end_date:
-                end_date = datetime.fromisoformat(end_date).strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=f"Invalid datetime format: {str(ve)}. Use YYYY-MM-DD HH:MM:SS.")
-
-        stats = data_service.get_stats(channels, start_date, end_date)
+        stats = data_service.get_stats(
+            channels=params.channels,
+            start_date=params.start_date.strftime("%Y-%m-%d %H:%M:%S") if params.start_date else None,
+            end_date=params.end_date.strftime("%Y-%m-%d %H:%M:%S") if params.end_date else None
+        )
 
         if not stats:
             raise HTTPException(status_code=404, detail="No data found for the given parameters")
 
         return stats
+
     except HTTPException as he:
+        # Re-raise HTTP exceptions without catching them
         raise he
+    except ValueError as ve:
+        # Bad request for validation errors
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        # Unexpected errors
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
