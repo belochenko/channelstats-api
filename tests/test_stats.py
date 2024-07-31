@@ -37,7 +37,7 @@ def test_get_stats_for_specific_channels(client):
         assert isinstance(channel_stats['count'], int)
 
 def test_get_stats_with_date_range(client):
-    response = client.get("/stats?start_date=2019-06-27&end_date=2019-06-28")
+    response = client.get("/stats?start_date=2019-06-27%2004%3A40%3A00&end_date=2019-06-27%2005%3A40%3A00")
     assert response.status_code == 200
     stats = response.json()
     assert isinstance(stats, dict)
